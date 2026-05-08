@@ -19,7 +19,7 @@ async def cmd_intel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🔍 <b>Portal de Inteligência Black-Core</b>\n\n"
             "Use: <code>/intel <alvo_ou_termo></code>\n"
-            "Exemplo: <code>/intel "domain.onion"</code>",
+            "Exemplo: <code>/intel 'domain.onion'</code>",
             parse_mode="HTML"
         )
         return
