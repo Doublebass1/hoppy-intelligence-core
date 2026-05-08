@@ -277,6 +277,7 @@ def resumo_geral():
         return ""
 
     texto = ""
+
     for evolucao, data in dados:
         texto += f"• {data}: {evolucao}\n"
 
