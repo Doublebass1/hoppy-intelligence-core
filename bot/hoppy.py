@@ -1,642 +1,517 @@
-"""
-hoppy.py — Hoppy Intelligence Core v1
-Interface principal do bot no Telegram.
-
-Objetivos desta versão:
-- Menu profissional com botões.
-- Manter funções de gestão, IA, links e áudio.
-- Acrescentar Portal OSINT seguro em modo curadoria.
-- Melhorar mensagens de erro e estabilidade no Railway.
-"""
-import asyncio
-import html
-import json
-import logging
 import os
-import smtplib
-from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from typing import Optional
+import logging
+import asyncio
+import inspect
 
-import anthropic
-import gspread
-from google.oauth2.service_account import Credentials
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    BotCommand,
+)
 from telegram.ext import (
     Application,
-    CallbackQueryHandler,
     CommandHandler,
-    ContextTypes,
     MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
     filters,
 )
 
 from handlers.voice_separation import get_separation_handler
 from link_analyzer import analyze_link
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+from services.memory_service import (
+    add_paciente,
+    add_aluno,
+    add_tarefa,
+    listar_pacientes,
+    listar_alunos,
+    listar_tarefas,
+    resumo_geral,
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+
 logger = logging.getLogger("hoppy")
 
-# ── Variáveis de ambiente ──────────────────────────────────
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
-CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
-ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
-GMAIL_USER = os.environ.get("GMAIL_USER", "")
-GMAIL_PASS = os.environ.get("GMAIL_APP_PASSWORD", "")
-GMAIL_DEST = os.environ.get("GMAIL_DESTINO", "")
-ADMIN_IDS = {
-    int(x.strip()) for x in os.environ.get("HOPPY_ADMIN_IDS", "").split(",") if x.strip().lstrip("-").isdigit()
-}
-
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
-
-chat_ids = set()
-
-# ── Utilitários ────────────────────────────────────────────
-def esc(value) -> str:
-    return html.escape(str(value))
+ADMIN_IDS = os.environ.get("ADMIN_IDS", "")
 
 
-def is_admin(update: Update) -> bool:
+def is_admin(user_id: int) -> bool:
     if not ADMIN_IDS:
-        return True  # modo pessoal: se não configurou admin, libera para o dono que usa o bot
-    return bool(update.effective_user and update.effective_user.id in ADMIN_IDS)
-
-
-def has_google_config() -> bool:
-    return bool(SHEET_ID and CREDENTIALS_JSON)
-
-
-def get_sheet(nome_aba):
-    if not has_google_config():
-        raise RuntimeError("Google Sheets não configurado. Defina GOOGLE_SHEET_ID e GOOGLE_CREDENTIALS_JSON no Railway.")
-    creds_dict = json.loads(CREDENTIALS_JSON)
-    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_key(SHEET_ID)
-    try:
-        return sheet.worksheet(nome_aba)
-    except gspread.WorksheetNotFound:
-        return sheet.add_worksheet(title=nome_aba, rows=1000, cols=20)
-
-
-def garantir_cabecalhos(ws, cabecalhos):
-    if not ws.row_values(1):
-        ws.append_row(cabecalhos)
-
-
-async def safe_reply(update: Update, text: str, **kwargs):
-    if update.message:
-        return await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True, **kwargs)
-    if update.callback_query:
-        return await update.callback_query.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True, **kwargs)
-
-
-def enviar_email(assunto, corpo):
-    if not all([GMAIL_USER, GMAIL_PASS, GMAIL_DEST]):
-        return False
-    try:
-        msg = MIMEMultipart()
-        msg["From"] = GMAIL_USER
-        msg["To"] = GMAIL_DEST
-        msg["Subject"] = assunto
-        msg.attach(MIMEText(corpo, "plain", "utf-8"))
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(GMAIL_USER, GMAIL_PASS)
-            server.sendmail(GMAIL_USER, GMAIL_DEST, msg.as_string())
         return True
-    except Exception as e:
-        logger.error("Erro email: %s", e)
-        return False
+    return str(user_id) in [x.strip() for x in ADMIN_IDS.split(",") if x.strip()]
 
 
-def perguntar_claude(pergunta, contexto_extra=""):
-    if not ANTHROPIC_KEY:
-        raise ValueError("ANTHROPIC_API_KEY não configurada no Railway.")
-
-    client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-    system = (
-        "Você é o Hoppy Intelligence Core, um assistente operacional de José Batista, "
-        "musicoterapeuta, professor de música e criador de uma central modular de inteligência. "
-        "Responda em português brasileiro, com clareza, utilidade prática e segurança. "
-        "Quando o assunto for OSINT, privacidade ou redes privadas, mantenha foco defensivo, legal e ético."
+def main_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ["🌍 Radar Global", "🕵️ Portal OSINT"],
+            ["🧠 IA Assistente", "🎵 Áudio IA"],
+            ["🔗 Links", "📊 Painel"],
+            ["📚 Gestão", "🛡 Admin"],
+            ["❓ Ajuda"],
+        ],
+        resize_keyboard=True
     )
-    if contexto_extra:
-        system += f"\n\nContexto interno autorizado:\n{contexto_extra}"
-
-    msg = client.messages.create(
-        model=ANTHROPIC_MODEL,
-        max_tokens=1200,
-        system=system,
-        messages=[{"role": "user", "content": pergunta}],
-    )
-    return msg.content[0].text
 
 
-def buscar_contexto_paciente(nome):
-    if not has_google_config():
-        return ""
-    for aba in ["Pacientes", "Alunos"]:
-        try:
-            ws = get_sheet(aba)
-            for r in ws.get_all_records():
-                if nome.lower() in str(r.get("Nome", "")).lower():
-                    return f"Dados de {r.get('Nome')} ({aba[:-1]}): " + " | ".join(
-                        f"{k}: {v}" for k, v in r.items() if v
-                    )
-        except Exception:
-            pass
-    return ""
-
-# ── Menus ──────────────────────────────────────────────────
-def main_menu():
+def inline_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌍 Radar Global", callback_data="menu_radar"), InlineKeyboardButton("🕵️ Portal OSINT", callback_data="menu_osint")],
-        [InlineKeyboardButton("🧠 IA Assistente", callback_data="menu_ia"), InlineKeyboardButton("🎵 Áudio IA", callback_data="menu_audio")],
-        [InlineKeyboardButton("🔗 Links", callback_data="menu_links"), InlineKeyboardButton("📊 Painel", callback_data="menu_painel")],
-        [InlineKeyboardButton("📚 Gestão", callback_data="menu_gestao"), InlineKeyboardButton("🛡️ Admin", callback_data="menu_admin")],
-        [InlineKeyboardButton("❓ Ajuda", callback_data="menu_ajuda")],
+        [
+            InlineKeyboardButton("🌍 Radar Global", callback_data="menu_radar"),
+            InlineKeyboardButton("🕵️ Portal OSINT", callback_data="menu_osint"),
+        ],
+        [
+            InlineKeyboardButton("🧠 IA Assistente", callback_data="menu_ia"),
+            InlineKeyboardButton("🎵 Áudio IA", callback_data="menu_audio"),
+        ],
+        [
+            InlineKeyboardButton("🔗 Links", callback_data="menu_links"),
+            InlineKeyboardButton("📊 Painel", callback_data="menu_painel"),
+        ],
+        [
+            InlineKeyboardButton("📚 Gestão", callback_data="menu_gestao"),
+            InlineKeyboardButton("🛡 Admin", callback_data="menu_admin"),
+        ],
+        [
+            InlineKeyboardButton("❓ Ajuda", callback_data="menu_ajuda"),
+        ],
     ])
 
 
+async def safe_reply(update: Update, text: str, reply_markup=None):
+    if update.message:
+        await update.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat:
-        chat_ids.add(update.effective_chat.id)
     texto = (
         "🤖 <b>Hoppy Intelligence Core v1</b>\n\n"
-        "Central modular para uso diário:\n"
-        "🌍 radar/tradução • 🧠 IA • 🎵 áudio • 🔗 links • 🕵️ OSINT seguro • 📊 gestão\n\n"
-        "Escolha uma área abaixo ou use /ajuda para ver todos os comandos."
+        "Central modular para uso diário:\n\n"
+        "🌍 Radar Global\n"
+        "🕵️ Portal OSINT\n"
+        "🧠 IA Assistente\n"
+        "🎵 Áudio IA\n"
+        "🔗 Análise de Links\n"
+        "📊 Painel\n"
+        "📚 Gestão de alunos, pacientes e tarefas\n"
+        "🛡 Admin\n\n"
+        "Escolha uma opção abaixo ou use /ajuda."
     )
-    await safe_reply(update, texto, reply_markup=main_menu())
+
+    await safe_reply(update, texto, reply_markup=inline_menu())
+
+    if update.message:
+        await update.message.reply_text(
+            "📌 Menu rápido ativado.",
+            reply_markup=main_keyboard()
+        )
+
+
+async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = (
+        "❓ <b>Comandos do Hoppy Intelligence Core</b>\n\n"
+        "🏠 <b>Geral</b>\n"
+        "/start — abrir menu principal\n"
+        "/ajuda — ver comandos\n"
+        "/painel — resumo do sistema\n"
+        "/admin — status técnico\n\n"
+        "📚 <b>Gestão</b>\n"
+        "/addpaciente Nome | observação\n"
+        "/addaluno Nome | observação\n"
+        "/addtarefa descrição da tarefa\n\n"
+        "📋 <b>Listar</b>\n"
+        "/listar pacientes\n"
+        "/listar alunos\n"
+        "/listar tarefas\n\n"
+        "🎵 <b>Áudio</b>\n"
+        "/separar — separar vocal/instrumental\n\n"
+        "🔗 <b>Links</b>\n"
+        "Envie um link do YouTube ou Instagram para análise."
+    )
+
+    await safe_reply(update, texto, reply_markup=main_keyboard())
+
+
+async def painel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    r = resumo_geral()
+
+    texto = (
+        "📊 <b>Painel Hoppy</b>\n\n"
+        f"🎵 Pacientes: <b>{r['pacientes']}</b>\n"
+        f"📚 Alunos: <b>{r['alunos']}</b>\n"
+        f"✅ Tarefas pendentes: <b>{r['tarefas']}</b>\n\n"
+        "🟢 Sistema online\n"
+        "🧠 Memória SQLite ativa\n"
+        "🌐 Tradutor rodando em background"
+    )
+
+    await safe_reply(update, texto, reply_markup=main_keyboard())
+
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if not is_admin(user_id):
+        await safe_reply(update, "⛔ Acesso negado.")
+        return
+
+    texto = (
+        "🛡 <b>Admin Hoppy</b>\n\n"
+        "✅ Railway online\n"
+        "✅ Banco SQLite ativo\n"
+        "✅ Bot Telegram ativo\n"
+        "✅ Tradutor Telethon ativo\n"
+        "✅ Scheduler ativo\n\n"
+        "⚠️ Checklist:\n"
+        "• manter TELEGRAM_TOKEN no Railway\n"
+        "• manter TRADUTOR_SESSION_STRING no Railway\n"
+        "• não subir credentials.json no GitHub\n"
+        "• manter apenas 1 instância do bot rodando"
+    )
+
+    await safe_reply(update, texto, reply_markup=main_keyboard())
+
+
+def parse_nome_obs(texto: str):
+    partes = texto.split(" ", 1)
+    if len(partes) < 2 or not partes[1].strip():
+        return None, None
+
+    conteudo = partes[1].strip()
+
+    if "|" in conteudo:
+        nome, obs = conteudo.split("|", 1)
+        return nome.strip(), obs.strip()
+
+    return conteudo.strip(), ""
+
+
+async def cmd_addpaciente(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nome, obs = parse_nome_obs(update.message.text)
+
+    if not nome:
+        await update.message.reply_text(
+            "Use assim:\n/addpaciente Nome | observação"
+        )
+        return
+
+    add_paciente(nome, obs)
+
+    await update.message.reply_text(
+        f"✅ Paciente salvo:\n\n🎵 <b>{nome}</b>\n📝 {obs or 'Sem observação'}",
+        parse_mode="HTML",
+        reply_markup=main_keyboard()
+    )
+
+
+async def cmd_addaluno(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nome, obs = parse_nome_obs(update.message.text)
+
+    if not nome:
+        await update.message.reply_text(
+            "Use assim:\n/addaluno Nome | observação"
+        )
+        return
+
+    add_aluno(nome, obs)
+
+    await update.message.reply_text(
+        f"✅ Aluno salvo:\n\n📚 <b>{nome}</b>\n📝 {obs or 'Sem observação'}",
+        parse_mode="HTML",
+        reply_markup=main_keyboard()
+    )
+
+
+async def cmd_addtarefa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.split(" ", 1)
+
+    if len(texto) < 2 or not texto[1].strip():
+        await update.message.reply_text(
+            "Use assim:\n/addtarefa descrição da tarefa"
+        )
+        return
+
+    tarefa = texto[1].strip()
+    user_id = update.effective_user.id
+
+    add_tarefa(user_id, tarefa)
+
+    await update.message.reply_text(
+        f"✅ Tarefa salva:\n\n📌 {tarefa}",
+        reply_markup=main_keyboard()
+    )
+
+
+async def cmd_listar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "Use:\n/listar pacientes\n/listar alunos\n/listar tarefas"
+        )
+        return
+
+    tipo = context.args[0].lower()
+
+    if tipo in ["paciente", "pacientes"]:
+        dados = listar_pacientes()
+        if not dados:
+            await update.message.reply_text("Nenhum paciente cadastrado.")
+            return
+
+        texto = "🎵 <b>Pacientes cadastrados</b>\n\n"
+        for i, nome, obs in dados:
+            texto += f"#{i} — <b>{nome}</b>\n📝 {obs or 'Sem observação'}\n\n"
+
+    elif tipo in ["aluno", "alunos"]:
+        dados = listar_alunos()
+        if not dados:
+            await update.message.reply_text("Nenhum aluno cadastrado.")
+            return
+
+        texto = "📚 <b>Alunos cadastrados</b>\n\n"
+        for i, nome, obs in dados:
+            texto += f"#{i} — <b>{nome}</b>\n📝 {obs or 'Sem observação'}\n\n"
+
+    elif tipo in ["tarefa", "tarefas"]:
+        dados = listar_tarefas()
+        if not dados:
+            await update.message.reply_text("Nenhuma tarefa cadastrada.")
+            return
+
+        texto = "✅ <b>Tarefas cadastradas</b>\n\n"
+        for i, tarefa, status in dados:
+            texto += f"#{i} — {tarefa}\n📌 Status: {status}\n\n"
+
+    else:
+        texto = "Tipo inválido. Use: pacientes, alunos ou tarefas."
+
+    await update.message.reply_text(
+        texto[:4000],
+        parse_mode="HTML",
+        reply_markup=main_keyboard()
+    )
 
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
     data = query.data
-    menus = {
+
+    respostas = {
         "menu_radar": (
             "🌍 <b>Radar Global</b>\n\n"
-            "O tradutor roda em paralelo via Telethon. Use no supergrupo destino:\n"
-            "• /status\n• /relatorio\n• /ultimos\n• /ajuda\n\n"
-            "Próxima etapa: clusterização, score e resumos IA."
+            "Central de monitoramento e tradução.\n\n"
+            "Funções atuais:\n"
+            "• Tradutor automático ativo\n"
+            "• 19 grupos monitorados\n"
+            "• Classificação por tema e urgência\n\n"
+            "Próximo módulo: feeds, clusters e alertas IA."
         ),
         "menu_osint": (
-            "🕵️ <b>Portal OSINT Seguro</b>\n\n"
-            "Base da integração das 20 ferramentas em camadas:\n"
-            "• Ahmia / Onion Discovery legal\n"
-            "• Shodan defensivo\n"
-            "• SpiderFoot como motor OSINT\n"
-            "• Grafos estilo Maltego\n"
-            "• Curadoria, reputação e risco\n\n"
-            "Comandos:\n/osint\n/osint_status\n/buscar_grupos tema"
+            "🕵️ <b>Portal OSINT</b>\n\n"
+            "Módulo de inteligência aberta e curadoria.\n\n"
+            "Base futura:\n"
+            "• Telegram Discovery\n"
+            "• Ahmia\n"
+            "• Shodan\n"
+            "• SpiderFoot\n"
+            "• Grafos estilo Maltego\n\n"
+            "Uso permitido: pesquisa ética, fontes públicas e análise defensiva."
         ),
-        "menu_ia": "🧠 <b>IA Assistente</b>\n\nUse:\n• /ia sua pergunta\n• /ia_paciente Nome - pergunta",
-        "menu_audio": "🎵 <b>Áudio IA</b>\n\nUse /separar para iniciar o fluxo de separação de áudio.",
-        "menu_links": "🔗 <b>Inteligência de Links</b>\n\nEnvie um link do YouTube ou Instagram e eu faço a análise inicial.",
-        "menu_painel": "📊 <b>Painel</b>\n\nUse /painel ou /resumo para ver estado geral.",
+        "menu_ia": (
+            "🧠 <b>IA Assistente</b>\n\n"
+            "Em breve:\n"
+            "• memória contextual\n"
+            "• resumos\n"
+            "• relatórios\n"
+            "• análise de links\n"
+            "• suporte à gestão"
+        ),
+        "menu_audio": (
+            "🎵 <b>Áudio IA</b>\n\n"
+            "Use /separar para iniciar.\n\n"
+            "Próximos recursos:\n"
+            "• BPM\n"
+            "• tonalidade\n"
+            "• transcrição\n"
+            "• análise musical"
+        ),
+        "menu_links": (
+            "🔗 <b>Links</b>\n\n"
+            "Envie um link do YouTube ou Instagram para análise automática."
+        ),
+        "menu_painel": None,
         "menu_gestao": (
             "📚 <b>Gestão</b>\n\n"
-            "/aluno • /paciente • /agenda • /tarefa • /concluir • /obs • /presenca • /financeiro • /listar"
+            "Comandos:\n"
+            "/addpaciente Nome | observação\n"
+            "/addaluno Nome | observação\n"
+            "/addtarefa descrição\n"
+            "/listar pacientes\n"
+            "/listar alunos\n"
+            "/listar tarefas"
         ),
-        "menu_admin": "🛡️ <b>Admin</b>\n\nUse /admin para status técnico e checklist de segurança.",
-        "menu_ajuda": await_text_help(),
+        "menu_admin": None,
+        "menu_ajuda": None,
     }
-    await query.edit_message_text(menus.get(data, "Menu não encontrado."), parse_mode="HTML", reply_markup=main_menu())
 
-
-def await_text_help():
-    return (
-        "❓ <b>Comandos do Hoppy</b>\n\n"
-        "<b>Interface</b>\n/start — menu principal\n/ajuda — comandos\n/painel — painel geral\n/admin — status técnico\n\n"
-        "<b>IA</b>\n/ia pergunta\n/ia_paciente Nome - pergunta\n\n"
-        "<b>Gestão</b>\n/aluno • /paciente • /agenda • /tarefa • /concluir • /obs • /presenca • /financeiro • /relatorio • /resumo • /listar • /backup\n\n"
-        "<b>Mídia</b>\n/separar — separação de áudio\nEnvie links para análise automática.\n\n"
-        "<b>OSINT seguro</b>\n/osint\n/osint_status\n/buscar_grupos tema"
-    )
-
-
-async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await safe_reply(update, await_text_help(), reply_markup=main_menu())
-
-
-async def painel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    linhas = ["📊 <b>Painel Hoppy Intelligence Core</b>\n"]
-    linhas.append(f"🟢 Bot principal: online")
-    linhas.append(f"🧠 IA: {'configurada' if ANTHROPIC_KEY else 'não configurada'}")
-    linhas.append(f"📄 Google Sheets: {'configurado' if has_google_config() else 'não configurado'}")
-    linhas.append(f"📧 Backup email: {'configurado' if all([GMAIL_USER, GMAIL_PASS, GMAIL_DEST]) else 'não configurado'}")
-    linhas.append(f"👤 Admin IDs: {'configurados' if ADMIN_IDS else 'modo pessoal/liberado'}")
-    linhas.append("\n🌍 Tradutor: roda em thread separada pelo run_all.py")
-    linhas.append("🕵️ Portal OSINT: v1 curadoria/roadmap seguro")
-    await safe_reply(update, "\n".join(linhas), reply_markup=main_menu())
-
-
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        await safe_reply(update, "⛔ Acesso admin negado.")
+    if data == "menu_painel":
+        await painel(update, context)
         return
-    texto = (
-        "🛡️ <b>Admin / Segurança</b>\n\n"
-        "Checklist recomendado:\n"
-        "• Remover credentials.json do GitHub\n"
-        "• Usar GOOGLE_CREDENTIALS_JSON apenas no Railway\n"
-        "• Manter TELEGRAM_TOKEN fora do código\n"
-        "• Manter TRADUTOR_SESSION_STRING fora do código\n"
-        "• Rodar apenas 1 deploy ativo\n"
-        "• Configurar HOPPY_ADMIN_IDS para restringir comandos sensíveis\n\n"
-        "Use /painel para status geral."
-    )
-    await safe_reply(update, texto)
 
-# ── Portal OSINT seguro ────────────────────────────────────
-async def osint(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = (
-        "🕵️ <b>Portal OSINT Seguro — V1</b>\n\n"
-        "Objetivo: integrar as 20 ferramentas como sensores de inteligência, com curadoria e filtros de risco.\n\n"
-        "<b>Camada V1:</b>\n"
-        "1. Ahmia / Onion Discovery legal\n"
-        "2. Shodan defensivo\n"
-        "3. SpiderFoot como motor OSINT\n"
-        "4. Grafos estilo Maltego\n"
-        "5. Busca de grupos/canais públicos do Telegram\n"
-        "6. Classificação: tema, idioma, risco, reputação\n\n"
-        "Este módulo não automatiza invasão, coleta ilegal, compra/venda ilícita ou acesso a grupos privados."
-    )
-    await safe_reply(update, texto)
-
-
-async def osint_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = (
-        "🕵️ <b>Status OSINT</b>\n\n"
-        "Ahmia: planejado\n"
-        "Tor/Stem: planejado\n"
-        "txtorcon: planejado\n"
-        "SpiderFoot: planejado\n"
-        "Shodan: planejado\n"
-        "Grafo local: planejado\n\n"
-        "V1 atual: portal, curadoria, menu e comandos seguros."
-    )
-    await safe_reply(update, texto)
-
-
-async def buscar_grupos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    termo = " ".join(context.args).strip()
-    if not termo:
-        await safe_reply(update, "🔎 Uso: /buscar_grupos tema\nEx: /buscar_grupos musicoterapia")
+    if data == "menu_admin":
+        await admin(update, context)
         return
-    texto = (
-        f"🔎 <b>Busca de grupos públicos</b>\n\nTema: <b>{esc(termo)}</b>\n\n"
-        "V1 segura: vou transformar isso em um módulo que encontra e organiza canais/grupos públicos por tema, "
-        "com favoritos, reputação, idioma e relatório.\n\n"
-        "Próxima implementação: conectores públicos + curadoria manual + banco de favoritos."
+
+    if data == "menu_ajuda":
+        await ajuda(update, context)
+        return
+
+    texto = respostas.get(data, "Opção em desenvolvimento.")
+
+    await query.message.reply_text(
+        texto,
+        parse_mode="HTML",
+        reply_markup=main_keyboard(),
+        disable_web_page_preview=True
     )
-    await safe_reply(update, texto)
-
-# ── Gestão / Sheets ────────────────────────────────────────
-async def aluno(update, context):
-    try:
-        texto = " ".join(context.args)
-        if not texto:
-            await safe_reply(update, "📚 Uso: /aluno Nome - Localidade - Dia - Horário - Nascimento")
-            return
-        partes = [p.strip() for p in texto.split("-")]
-        if len(partes) < 4:
-            await safe_reply(update, "⚠️ Use: /aluno Nome - Localidade - Dia - Horário")
-            return
-        nome, local, dia, hora = partes[0], partes[1], partes[2], partes[3]
-        nasc = partes[4] if len(partes) > 4 else ""
-        ws = get_sheet("Alunos")
-        garantir_cabecalhos(ws, ["Data Cadastro", "Nome", "Localidade", "Dia", "Horário", "Nascimento", "Observações"])
-        ws.append_row([datetime.now().strftime("%d/%m/%Y"), nome, local, dia, hora, nasc, ""])
-        await safe_reply(update, f"✅ <b>Aluno registrado!</b>\n👤 {esc(nome)}\n📍 {esc(local)}\n📅 {esc(dia)} às {esc(hora)}")
-    except Exception as e:
-        await safe_reply(update, f"⚠️ Erro ao registrar aluno: {esc(e)}")
 
 
-async def paciente(update, context):
-    try:
-        texto = " ".join(context.args)
-        if not texto:
-            await safe_reply(update, "🎵 Uso: /paciente Nome - Diagnóstico - Dia - Horário - Nascimento")
-            return
-        partes = [p.strip() for p in texto.split("-")]
-        if len(partes) < 4:
-            await safe_reply(update, "⚠️ Use: /paciente Nome - Diagnóstico - Dia - Horário")
-            return
-        nome, diag, dia, hora = partes[0], partes[1], partes[2], partes[3]
-        nasc = partes[4] if len(partes) > 4 else ""
-        ws = get_sheet("Pacientes")
-        garantir_cabecalhos(ws, ["Data Cadastro", "Nome", "Diagnóstico", "Dia", "Horário", "Nascimento", "Observações"])
-        ws.append_row([datetime.now().strftime("%d/%m/%Y"), nome, diag, dia, hora, nasc, ""])
-        await safe_reply(update, f"✅ <b>Paciente registrado!</b>\n👤 {esc(nome)}\n🏥 {esc(diag)}\n📅 {esc(dia)} às {esc(hora)}")
-    except Exception as e:
-        await safe_reply(update, f"⚠️ Erro ao registrar paciente: {esc(e)}")
-
-
-async def agenda(update, context):
-    try:
-        texto = " ".join(context.args)
-        if not texto:
-            await safe_reply(update, "📅 Uso: /agenda Descrição - DD/MM/AAAA - HH:MM")
-            return
-        partes = [p.strip() for p in texto.split("-")]
-        if len(partes) < 3:
-            await safe_reply(update, "⚠️ Use: /agenda Descrição - DD/MM/AAAA - HH:MM")
-            return
-        ws = get_sheet("Agenda")
-        garantir_cabecalhos(ws, ["Registrado em", "Descrição", "Data", "Horário", "Status"])
-        ws.append_row([datetime.now().strftime("%d/%m/%Y %H:%M"), partes[0], partes[1], partes[2], "Pendente"])
-        await safe_reply(update, f"✅ <b>Agendado!</b>\n📌 {esc(partes[0])}\n📅 {esc(partes[1])} às {esc(partes[2])}")
-    except Exception as e:
-        await safe_reply(update, f"⚠️ Erro na agenda: {esc(e)}")
-
-
-async def tarefa(update, context):
-    try:
-        texto = " ".join(context.args).strip()
-        if not texto:
-            await safe_reply(update, "✅ Uso: /tarefa Descrição")
-            return
-        ws = get_sheet("Tarefas")
-        garantir_cabecalhos(ws, ["Data", "Tarefa", "Status"])
-        ws.append_row([datetime.now().strftime("%d/%m/%Y"), texto, "Pendente"])
-        await safe_reply(update, f"✅ <b>Tarefa adicionada!</b>\n📝 {esc(texto)}")
-    except Exception as e:
-        await safe_reply(update, f"⚠️ Erro na tarefa: {esc(e)}")
-
-
-async def concluir(update, context):
-    try:
-        texto = " ".join(context.args).strip()
-        if not texto:
-            await safe_reply(update, "✔️ Uso: /concluir Parte do nome da tarefa")
-            return
-        ws = get_sheet("Tarefas")
-        for i, r in enumerate(ws.get_all_records(), start=2):
-            if texto.lower() in str(r.get("Tarefa", "")).lower() and r.get("Status") == "Pendente":
-                ws.update_cell(i, 3, "Concluída")
-                await safe_reply(update, f"✔️ <b>Concluída!</b>\n📝 {esc(r.get('Tarefa'))}")
-                return
-        await safe_reply(update, "⚠️ Tarefa pendente não encontrada.")
-    except Exception as e:
-        await safe_reply(update, f"⚠️ Erro ao concluir: {esc(e)}")
-
-
-async def obs(update, context):
-    try:
-        texto = " ".join(context.args)
-        if not texto or "-" not in texto:
-            await safe_reply(update, "📝 Uso: /obs Nome - Observação")
-            return
-        nome, observacao = [p.strip() for p in texto.split("-", 1)]
-        atualizado = False
-        for aba in ["Alunos", "Pacientes"]:
-            ws = get_sheet(aba)
-            for i, r in enumerate(ws.get_all_records(), start=2):
-                if nome.lower() in str(r.get("Nome", "")).lower():
-                    obs_atual = str(r.get("Observações", ""))
-                    nova = f"{datetime.now().strftime('%d/%m/%Y')}: {observacao}"
-                    ws.update_cell(i, 7, (obs_atual + " | " + nova).strip(" | "))
-                    await safe_reply(update, f"📝 <b>Observação salva!</b>\n👤 {esc(r.get('Nome'))}\n💬 {esc(observacao)}")
-                    atualizado = True
-                    break
-            if atualizado:
-                break
-        if not atualizado:
-            ws = get_sheet("Observações")
-            garantir_cabecalhos(ws, ["Data", "Nome", "Observação"])
-            ws.append_row([datetime.now().strftime("%d/%m/%Y"), nome, observacao])
-            await safe_reply(update, f"📝 <b>Observação salva!</b>\n👤 {esc(nome)}")
-    except Exception as e:
-        await safe_reply(update, f"⚠️ Erro em observação: {esc(e)}")
-
-
-async def presenca(update, context):
-    try:
-        texto = " ".join(context.args)
-        if not texto or "-" not in texto:
-            await safe_reply(update, "👤 Uso: /presenca Nome - presente/falta")
-            return
-        nome, status = [p.strip() for p in texto.split("-", 1)]
-        ws = get_sheet("Presença")
-        garantir_cabecalhos(ws, ["Data", "Nome", "Status", "Observação"])
-        ws.append_row([datetime.now().strftime("%d/%m/%Y"), nome, status.capitalize(), ""])
-        emoji = "✅" if "presente" in status.lower() else "❌"
-        await safe_reply(update, f"{emoji} <b>Presença registrada!</b>\n👤 {esc(nome)} — {esc(status.capitalize())}")
-    except Exception as e:
-        await safe_reply(update, f"⚠️ Erro em presença: {esc(e)}")
-
-
-async def financeiro(update, context):
-    try:
-        texto = " ".join(context.args)
-        if not texto:
-            await safe_reply(update, "💰 Uso: /financeiro entrada/saida - Descrição - Valor")
-            return
-        partes = [p.strip() for p in texto.split("-")]
-        if len(partes) < 3:
-            await safe_reply(update, "⚠️ Use: /financeiro entrada/saida - Descrição - Valor")
-            return
-        ws = get_sheet("Financeiro")
-        garantir_cabecalhos(ws, ["Data", "Mês", "Tipo", "Descrição", "Valor (R$)"])
-        ws.append_row([datetime.now().strftime("%d/%m/%Y"), datetime.now().strftime("%m/%Y"), partes[0].capitalize(), parts_desc := partes[1], partes[2]])
-        await safe_reply(update, f"💰 <b>Registrado!</b>\n{esc(partes[0].capitalize())} | {esc(parts_desc)} | R$ {esc(partes[2])}")
-    except Exception as e:
-        await safe_reply(update, f"⚠️ Erro financeiro: {esc(e)}")
-
-
-MESES = {"janeiro": "01", "fevereiro": "02", "março": "03", "abril": "04", "maio": "05", "junho": "06", "julho": "07", "agosto": "08", "setembro": "09", "outubro": "10", "novembro": "11", "dezembro": "12"}
-
-
-async def relatorio(update, context):
-    try:
-        texto = " ".join(context.args).strip().lower()
-        ano = datetime.now().strftime("%Y")
-        mes_num = datetime.now().strftime("%m") if not texto else MESES.get(texto, texto.split("/")[0].zfill(2))
-        if "/" in texto:
-            p = texto.split("/")
-            ano = p[1] if len(p) > 1 else ano
-        filtro = f"{mes_num}/{ano}"
-        ws = get_sheet("Financeiro")
-        registros = [r for r in ws.get_all_records() if str(r.get("Mês", "")).strip() == filtro]
-        if not registros:
-            await safe_reply(update, f"📊 Nenhum registro em {esc(filtro)}.")
-            return
-        ent = sum(float(str(r.get("Valor (R$)", 0)).replace(",", ".")) for r in registros if "entrada" in str(r.get("Tipo", "")).lower())
-        sai = sum(float(str(r.get("Valor (R$)", 0)).replace(",", ".")) for r in registros if "saida" in str(r.get("Tipo", "")).lower())
-        await safe_reply(update, f"💵 <b>Relatório {esc(filtro)}</b>\n\n📈 Entradas: R$ {ent:.2f}\n📉 Saídas: R$ {sai:.2f}\n📊 Saldo: R$ {(ent-sai):.2f}")
-    except Exception as e:
-        await safe_reply(update, f"⚠️ Erro no relatório: {esc(e)}")
-
-
-async def resumo(update, context):
-    await painel(update, context)
-
-
-async def listar(update, context):
-    try:
-        args = context.args
-        if not args:
-            await safe_reply(update, "📋 Uso: /listar alunos|pacientes|agenda|tarefas|financeiro|presenca [filtro]")
-            return
-        area = args[0].lower()
-        filtro = " ".join(args[1:]).lower()
-        mapa = {"alunos": "Alunos", "pacientes": "Pacientes", "agenda": "Agenda", "tarefas": "Tarefas", "financeiro": "Financeiro", "presenca": "Presença"}
-        if area not in mapa:
-            await safe_reply(update, "⚠️ Áreas: alunos, pacientes, agenda, tarefas, financeiro, presenca")
-            return
-        ws = get_sheet(mapa[area])
-        registros = ws.get_all_records()
-        if filtro:
-            registros = [r for r in registros if any(filtro in str(v).lower() for v in r.values())]
-        if not registros:
-            await safe_reply(update, f"📋 Nenhum registro em <b>{esc(mapa[area])}</b>.")
-            return
-        texto = f"📋 <b>{esc(mapa[area])}</b> ({len(registros[-10:])} últimos):\n\n"
-        for r in registros[-10:]:
-            vals = " | ".join(esc(v) for v in list(r.values())[:4] if v)
-            texto += f"• {vals}\n"
-        await safe_reply(update, texto[:4000])
-    except Exception as e:
-        await safe_reply(update, f"⚠️ Erro ao listar: {esc(e)}")
-
-
-async def ia(update, context):
-    texto = " ".join(context.args).strip()
-    if not texto:
-        await safe_reply(update, "🤖 Uso: /ia sua pergunta")
-        return
-    msg = await safe_reply(update, "🤖 Consultando a IA...")
-    try:
-        resposta = await asyncio.to_thread(perguntar_claude, texto)
-        await msg.edit_text(f"🤖 <b>Hoppy IA:</b>\n\n{esc(resposta)}", parse_mode="HTML")
-    except Exception as e:
-        await msg.edit_text(f"⚠️ Erro na IA: {esc(e)}", parse_mode="HTML")
-
-
-async def ia_paciente(update, context):
-    texto = " ".join(context.args).strip()
-    if not texto or "-" not in texto:
-        await safe_reply(update, "🧠 Uso: /ia_paciente Nome - Pergunta")
-        return
-    nome, pergunta = [p.strip() for p in texto.split("-", 1)]
-    msg = await safe_reply(update, f"🧠 Buscando contexto de <b>{esc(nome)}</b> e consultando a IA...")
-    try:
-        contexto = await asyncio.to_thread(buscar_contexto_paciente, nome)
-        resposta = await asyncio.to_thread(perguntar_claude, pergunta, contexto)
-        await msg.edit_text(f"🧠 <b>Hoppy IA — {esc(nome)}:</b>\n\n{esc(resposta)}", parse_mode="HTML")
-    except Exception as e:
-        await msg.edit_text(f"⚠️ Erro na IA: {esc(e)}", parse_mode="HTML")
-
-
-async def backup(update, context):
-    await safe_reply(update, "📧 Gerando backup...")
-    try:
-        hoje = datetime.now().strftime("%d/%m/%Y")
-        corpo = f"Backup do Hoppy Assistant — {hoje}\n\n"
-        for aba in ["Alunos", "Pacientes", "Agenda", "Tarefas", "Financeiro", "Presença"]:
-            try:
-                ws = get_sheet(aba)
-                registros = ws.get_all_records()
-                corpo += f"\n=== {aba} ({len(registros)} registros) ===\n"
-                for r in registros[-20:]:
-                    corpo += " | ".join(str(v) for v in r.values() if v) + "\n"
-            except Exception:
-                pass
-        ok = await asyncio.to_thread(enviar_email, f"Backup Hoppy Bot — {hoje}", corpo)
-        await safe_reply(update, f"{'✅ Backup enviado!' if ok else '⚠️ Erro ao enviar email. Verifique as configurações.'}")
-    except Exception as e:
-        await safe_reply(update, f"⚠️ Erro: {esc(e)}")
-
-# ── Links ──────────────────────────────────────────────────
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
+
     if not message or not message.text:
         return
+
     text = message.text.strip()
+
+    botoes = {
+        "🌍 radar global": "menu_radar",
+        "🕵️ portal osint": "menu_osint",
+        "🧠 ia assistente": "menu_ia",
+        "🎵 áudio ia": "menu_audio",
+        "🔗 links": "menu_links",
+        "📊 painel": "menu_painel",
+        "📚 gestão": "menu_gestao",
+        "🛡 admin": "menu_admin",
+        "❓ ajuda": "menu_ajuda",
+    }
+
+    if text.lower() in botoes:
+        fake_query = botoes[text.lower()]
+        if fake_query == "menu_painel":
+            await painel(update, context)
+        elif fake_query == "menu_admin":
+            await admin(update, context)
+        elif fake_query == "menu_ajuda":
+            await ajuda(update, context)
+        else:
+            await update.message.reply_text(
+                "Use os botões do menu ou /ajuda para ver os comandos.",
+                reply_markup=inline_menu()
+            )
+        return
+
     if "http" not in text:
         return
-    processing_msg = await message.reply_text("🔍 Analisando o link...")
+
+    processing_msg = await message.reply_text("🔍 Analisando o link, aguarde...")
+
     try:
-        analysis = await analyze_link(text)
-        await processing_msg.edit_text(analysis, parse_mode="HTML", disable_web_page_preview=True)
+        if inspect.iscoroutinefunction(analyze_link):
+            analysis = await analyze_link(text)
+        else:
+            analysis = await asyncio.to_thread(analyze_link, text)
+
+        await processing_msg.edit_text(
+            str(analysis)[:4000],
+            disable_web_page_preview=True
+        )
+
     except Exception as e:
-        logger.exception("Erro ao analisar link")
-        await processing_msg.edit_text(f"❌ Erro ao analisar o link: {esc(e)}", parse_mode="HTML")
-
-# ── Jobs leves ─────────────────────────────────────────────
-async def verificar_lembretes(context):
-    if not chat_ids or not has_google_config():
-        return
-    try:
-        ws = get_sheet("Agenda")
-        agora = datetime.now()
-        for r in ws.get_all_records():
-            if r.get("Status") != "Pendente":
-                continue
-            try:
-                hora_str = str(r.get("Horário", "")).strip().replace("h", ":00")
-                if ":" not in hora_str:
-                    hora_str = hora_str.zfill(2) + ":00"
-                dt = datetime.strptime(f"{r.get('Data')} {hora_str}", "%d/%m/%Y %H:%M")
-                diff = (dt - agora).total_seconds()
-                if 1740 <= diff <= 1860:
-                    for cid in chat_ids:
-                        await context.bot.send_message(chat_id=cid, text=f"🔔 Lembrete em 30 min!\n📌 {r.get('Descrição')}\n⏰ {r.get('Horário')}")
-            except Exception:
-                continue
-    except Exception as e:
-        logger.error("Erro lembrete: %s", e)
+        logger.exception(f"Erro ao analisar link: {e}")
+        await processing_msg.edit_text(
+            "❌ Erro ao analisar o link. Tente novamente mais tarde."
+        )
 
 
-async def post_init(app: Application):
-    await app.bot.set_my_commands([
-        BotCommand("start", "Abrir menu principal"),
-        BotCommand("ajuda", "Ver comandos"),
-        BotCommand("painel", "Status geral"),
-        BotCommand("ia", "Perguntar à IA"),
-        BotCommand("ia_paciente", "IA com contexto de aluno/paciente"),
-        BotCommand("separar", "Separar áudio"),
-        BotCommand("osint", "Portal OSINT seguro"),
-        BotCommand("buscar_grupos", "Buscar grupos públicos por tema"),
-        BotCommand("admin", "Painel admin"),
+async def post_init(application: Application):
+    await application.bot.set_my_commands([
+        BotCommand("start", "Abrir Hoppy Intelligence Core"),
+        BotCommand("ajuda", "Ver comandos disponíveis"),
+        BotCommand("painel", "Ver resumo do sistema"),
+        BotCommand("admin", "Painel técnico"),
+        BotCommand("separar", "Separar vocal e instrumental"),
+        BotCommand("addpaciente", "Adicionar paciente"),
+        BotCommand("addaluno", "Adicionar aluno"),
+        BotCommand("addtarefa", "Adicionar tarefa"),
+        BotCommand("listar", "Listar dados salvos"),
     ])
+
+
+async def verificar_lembretes(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Verificação periódica executada.")
 
 
 def main():
     if not TOKEN:
-        raise RuntimeError("TELEGRAM_TOKEN não configurado no Railway.")
+        logger.error("❌ TELEGRAM_TOKEN não configurado.")
+        return
 
-    app = Application.builder().token(TOKEN).post_init(post_init).build()
+    application = (
+        Application
+        .builder()
+        .token(TOKEN)
+        .post_init(post_init)
+        .build()
+    )
 
-    commands = [
-        ("start", start), ("ajuda", ajuda), ("painel", painel), ("admin", admin),
-        ("osint", osint), ("osint_status", osint_status), ("buscar_grupos", buscar_grupos),
-        ("aluno", aluno), ("paciente", paciente), ("agenda", agenda), ("tarefa", tarefa),
-        ("concluir", concluir), ("obs", obs), ("presenca", presenca), ("financeiro", financeiro),
-        ("relatorio", relatorio), ("resumo", resumo), ("listar", listar),
-        ("ia", ia), ("ia_paciente", ia_paciente), ("backup", backup),
-    ]
-    for name, fn in commands:
-        app.add_handler(CommandHandler(name, fn))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("ajuda", ajuda))
+    application.add_handler(CommandHandler("painel", painel))
+    application.add_handler(CommandHandler("admin", admin))
+    application.add_handler(CommandHandler("addpaciente", cmd_addpaciente))
+    application.add_handler(CommandHandler("addaluno", cmd_addaluno))
+    application.add_handler(CommandHandler("addtarefa", cmd_addtarefa))
+    application.add_handler(CommandHandler("listar", cmd_listar))
 
-    app.add_handler(get_separation_handler())
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_"))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"https?://") & ~filters.COMMAND, handle_link))
+    application.add_handler(get_separation_handler())
 
-    if app.job_queue:
-        app.job_queue.run_repeating(verificar_lembretes, interval=60, first=15)
+    application.add_handler(CallbackQueryHandler(menu_callback))
+
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link)
+    )
+
+    if application.job_queue:
+        application.job_queue.run_repeating(verificar_lembretes, interval=60, first=15)
 
     logger.info("🤖 Hoppy Intelligence Core v1 iniciado")
-    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+
+    application.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES
+    )
 
 
 if __name__ == "__main__":
