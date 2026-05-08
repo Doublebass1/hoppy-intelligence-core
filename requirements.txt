@@ -15,4 +15,6 @@ google-auth-httplib2
 google-auth-oauthlib
 python-dotenv
 yt-dlp
+deep-translator
+langdetect
 # Adicione outras bibliotecas que seu bot original usava aqui
