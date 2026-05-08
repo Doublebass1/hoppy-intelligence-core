@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+langchain
+langchain-core
+langchain-community
+langgraph
+
+requests[socks]
+stem
+
+neo4j
+
+ollama

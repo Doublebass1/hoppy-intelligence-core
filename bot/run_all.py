@@ -1,21 +1,9 @@
-"""
-run_all.py — Inicializador principal do Hoppy Intelligence Core
-Executa:
-1. Banco de dados SQLite
-2. Bot Tradutor em thread separada
-3. Hoppy Assistant na thread principal
-"""
-
-import asyncio
-import logging
 import threading
-import traceback
+import logging
+import time
+from dotenv import load_dotenv
 
-try:
-    from database.db import init_db
-except Exception:
-    init_db = None
-
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,70 +13,56 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def iniciar_banco():
-    """Inicializa o banco de dados local."""
-    if init_db is None:
-        logger.warning("⚠️ Banco de dados não encontrado. Continuando sem SQLite.")
-        return
-
+def iniciar_blackcore():
     try:
-        init_db()
-        logger.info("✅ Banco de dados inicializado com sucesso.")
-    except Exception:
-        logger.error("❌ Erro ao inicializar banco de dados:")
-        logger.error(traceback.format_exc())
+        logger.info("🕵️ Iniciando Black-Core API...")
 
+        import uvicorn
 
-def iniciar_tradutor_thread():
-    """Inicia o Tradutor Telethon em uma thread separada."""
-    try:
-        logger.info("🌐 Iniciando Bot Tradutor...")
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        from tradutor import main as tradutor_main
-
-        logger.info("✅ Bot Tradutor importado com sucesso.")
-        loop.run_until_complete(tradutor_main())
+        uvicorn.run(
+            "blackcore.main:app",
+            host="0.0.0.0",
+            port=8000,
+            reload=False,
+            log_level="info"
+        )
 
     except Exception:
-        logger.error("❌ Bot Tradutor caiu:")
-        logger.error(traceback.format_exc())
+        logger.exception("❌ Black-Core caiu:")
 
 
-def iniciar_hoppy():
-    """Inicia o Hoppy Assistant principal."""
-    try:
-        logger.info("🤖 Iniciando Hoppy Intelligence Core...")
+def iniciar_hoppy_supervisor():
+    while True:
+        try:
+            logger.info("🤖 Iniciando Hoppy Intelligence Core...")
 
-        from hoppy import main as hoppy_main
+            from hoppy import main as hoppy_main
 
-        hoppy_main()
+            hoppy_main()
 
-    except Exception:
-        logger.error("❌ Hoppy Intelligence Core caiu:")
-        logger.error(traceback.format_exc())
+            logger.warning(
+                "⚠️ Hoppy encerrou sem erro. Reiniciando em 5 segundos..."
+            )
 
+        except KeyboardInterrupt:
+            logger.info("🛑 Encerramento manual detectado.")
+            break
 
-def main():
-    """Função principal do sistema."""
+        except Exception:
+            logger.exception("❌ Hoppy Intelligence Core caiu:")
 
-    logger.info("🚀 Inicializando Hoppy Intelligence Core...")
-
-    iniciar_banco()
-
-    tradutor_thread = threading.Thread(
-        target=iniciar_tradutor_thread,
-        name="Thread-Tradutor",
-        daemon=True
-    )
-
-    tradutor_thread.start()
-    logger.info("✅ Bot Tradutor iniciado em background.")
-
-    iniciar_hoppy()
+        time.sleep(5)
 
 
 if __name__ == "__main__":
-    main()
+    logger.info("🚀 Inicializando Hoppy Intelligence Core...")
+
+    blackcore_thread = threading.Thread(
+        target=iniciar_blackcore,
+        daemon=True
+    )
+
+    blackcore_thread.start()
+    logger.info("✅ Black-Core iniciado.")
+
+    iniciar_hoppy_supervisor()

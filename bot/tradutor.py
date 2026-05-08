@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 """tradutor.py — Radar Global / Tradutor multi-grupo do Hoppy Intelligence Core v1."""
 import asyncio
 import json

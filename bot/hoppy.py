@@ -1,3 +1,14 @@
+from dotenv import load_dotenv
+load_dotenv()
+from handlers.black_core_handler import (
+    cmd_intel,
+    cmd_intel_history,
+    cmd_intel_report,
+    cmd_intel_watch,
+    cmd_intel_watchlist,
+    cmd_intel_unwatch,
+    cmd_intel_watch_run,
+)
 import os
 import logging
 import asyncio
@@ -640,7 +651,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(application: Application):
     await application.bot.set_my_commands([
-        BotCommand("start", "Abrir Hoppy Intelligence Core"),
+        BotCommand("intel", "Portal Black-Core"),
+        BotCommand("intel_history", "Ver histórico Black-Core"),
+        BotCommand("intel_report", "Abrir relatório Black-Core salvo"),
+        BotCommand("intel_watch", "Monitorar alvo Black-Core"),
+        BotCommand("intel_watchlist", "Listar alvos monitorados"),
+        BotCommand("intel_unwatch", "Remover alvo monitorado"),
+        BotCommand("intel_watch_run", "Executar monitoramento Black-Core"),
         BotCommand("menu", "Abrir menu principal"),
         BotCommand("ajuda", "Ver comandos disponíveis"),
         BotCommand("painel", "Ver resumo do sistema"),
@@ -677,7 +694,13 @@ def main():
         .build()
     )
 
-    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("intel", cmd_intel))
+    application.add_handler(CommandHandler("intel_history", cmd_intel_history))
+    application.add_handler(CommandHandler("intel_report", cmd_intel_report))
+    application.add_handler(CommandHandler("intel_watch", cmd_intel_watch))
+    application.add_handler(CommandHandler("intel_watchlist", cmd_intel_watchlist))
+    application.add_handler(CommandHandler("intel_unwatch", cmd_intel_unwatch))
+    application.add_handler(CommandHandler("intel_watch_run", cmd_intel_watch_run))
     application.add_handler(CommandHandler("menu", start))
     application.add_handler(CommandHandler("ajuda", ajuda))
     application.add_handler(CommandHandler("painel", painel))
@@ -709,9 +732,16 @@ def main():
     logger.info("🤖 Hoppy Intelligence Core v1 iniciado")
 
     application.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
-    )
+    allowed_updates=Update.ALL_TYPES,
+    poll_interval=1.0,
+    timeout=30,
+    read_timeout=60,
+    write_timeout=60,
+    connect_timeout=60,
+    pool_timeout=60,
+    drop_pending_updates=True,
+    stop_signals=None,
+)
 
 
 if __name__ == "__main__":
