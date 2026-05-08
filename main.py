@@ -102,7 +102,7 @@ def correlator_agent(state: AgentState):
         with graph_driver.session() as session:
             session.run("MERGE (q:Query {name: $query}) RETURN q", query=state["query"])
             for i, res in enumerate(state["results"]):
-                node_name = f"Result_{i}_{state["query"]}"
+                node_name = f"Result_{i}_{state['query']}"
                 session.run("MERGE (r:Result {name: $node_name, value: $res}) RETURN r", node_name=node_name, res=res)
                 session.run("MATCH (q:Query {name: $query}), (r:Result {name: $node_name}) MERGE (q)-[:HAS_RESULT]->(r)", query=state["query"], node_name=node_name)
                 graph_nodes.append({"node": node_name, "value": res})
@@ -112,7 +112,7 @@ def correlator_agent(state: AgentState):
 def contextualizer_agent(state: AgentState):
     print("Executing Contextualizer Agent (Local IA)...")
     # Aqui o Ollama processa o contexto localmente
-    contextual_summary = f"IA Analysis for {state["query"]}: Local intelligence processed with sovereign context."
+    contextual_summary = f"IA Analysis for {state['query']}: Local intelligence processed with sovereign context."
     return {"analysis": contextual_summary}
 
 def ranker_agent(state: AgentState):

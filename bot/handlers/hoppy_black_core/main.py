@@ -126,7 +126,7 @@ def correlator_agent(state: AgentState):
         with graph_driver.session() as session:
             session.run("MERGE (q:Query {name: $query}) RETURN q", query=state["query"])
             for i, res in enumerate(state["results"]):
-                node_name = f"Result_{i}_{state["query"]}"
+                node_name = f"Result_{i}_{state['query']}"
                 session.run("MERGE (r:Result {name: $node_name, value: $res}) RETURN r", node_name=node_name, res=res)
                 session.run("MATCH (q:Query {name: $query}), (r:Result {name: $node_name}) MERGE (q)-[:HAS_RESULT]->(r)", query=state["query"], node_name=node_name)
                 graph_nodes.append({"node": node_name, "value": res})
