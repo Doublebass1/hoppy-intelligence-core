@@ -1,0 +1,13 @@
+.env
+*.session
+*.session-journal
+credentials.json
+__pycache__/
+*.pyc
+media_temp/
+exports/
+telegram_tradutor.log
+mensagens_processadas.json
+estatisticas_dia.json
+auditoria.json
+ultimos_registros.json

@@ -1,0 +1,10 @@
+python-telegram-bot[job-queue]==20.7
+gspread==6.0.2
+google-auth==2.27.0
+anthropic==0.25.0
+telethon>=1.34.0
+deep-translator>=1.11.4
+langdetect>=1.0.9
+yt-dlp>=2024.04.09
+beautifulsoup4>=4.12.0
+requests>=2.31.0
