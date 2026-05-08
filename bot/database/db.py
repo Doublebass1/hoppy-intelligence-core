@@ -47,6 +47,26 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS evolucoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT,
+        texto TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS agenda (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT,
+        data TEXT,
+        horario TEXT,
+        observacao TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
     add_column_if_missing(cursor, "pacientes", "observacoes", "TEXT")
     add_column_if_missing(cursor, "alunos", "observacoes", "TEXT")
     add_column_if_missing(cursor, "tarefas", "user_id", "TEXT")

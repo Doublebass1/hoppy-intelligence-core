@@ -26,9 +26,13 @@ from services.memory_service import (
     add_paciente,
     add_aluno,
     add_tarefa,
+    add_evolucao,
+    add_agenda,
     listar_pacientes,
     listar_alunos,
     listar_tarefas,
+    listar_evolucoes,
+    listar_agenda,
     resumo_geral,
 )
 
@@ -80,27 +84,18 @@ def inline_menu():
             InlineKeyboardButton("📚 Gestão", callback_data="menu_gestao"),
             InlineKeyboardButton("🛡 Admin", callback_data="menu_admin"),
         ],
-        [
-            InlineKeyboardButton("❓ Ajuda", callback_data="menu_ajuda"),
-        ],
+        [InlineKeyboardButton("❓ Ajuda", callback_data="menu_ajuda")],
     ])
 
 
 async def safe_reply(update: Update, text: str, reply_markup=None):
-    if update.message:
-        await update.message.reply_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode="HTML",
-            disable_web_page_preview=True
-        )
-    elif update.callback_query:
-        await update.callback_query.message.reply_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode="HTML",
-            disable_web_page_preview=True
-        )
+    target = update.message or update.callback_query.message
+    await target.reply_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode="HTML",
+        disable_web_page_preview=True
+    )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -113,7 +108,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎵 Áudio IA\n"
         "🔗 Análise de Links\n"
         "📊 Painel\n"
-        "📚 Gestão de alunos, pacientes e tarefas\n"
+        "📚 Gestão clínica, alunos, agenda e tarefas\n"
         "🛡 Admin\n\n"
         "Escolha uma opção abaixo ou use /ajuda."
     )
@@ -132,19 +127,29 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❓ <b>Comandos do Hoppy Intelligence Core</b>\n\n"
         "🏠 <b>Geral</b>\n"
         "/start — abrir menu principal\n"
+        "/menu — abrir menu principal\n"
         "/ajuda — ver comandos\n"
-        "/painel — resumo do sistema\n"
-        "/admin — status técnico\n\n"
+        "/painel — ver resumo do sistema\n"
+        "/admin — painel técnico\n"
+        "/memoria — resumo da memória\n\n"
+
         "📚 <b>Gestão</b>\n"
         "/addpaciente Nome | observação\n"
         "/addaluno Nome | observação\n"
-        "/addtarefa descrição da tarefa\n\n"
+        "/addtarefa descrição da tarefa\n"
+        "/evolucao Nome | texto da evolução\n"
+        "/agenda Nome | data | horário | observação\n\n"
+
         "📋 <b>Listar</b>\n"
         "/listar pacientes\n"
         "/listar alunos\n"
-        "/listar tarefas\n\n"
+        "/listar tarefas\n"
+        "/listar evolucoes Nome\n"
+        "/listar agenda\n\n"
+
         "🎵 <b>Áudio</b>\n"
         "/separar — separar vocal/instrumental\n\n"
+
         "🔗 <b>Links</b>\n"
         "Envie um link do YouTube ou Instagram para análise."
     )
@@ -157,15 +162,21 @@ async def painel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     texto = (
         "📊 <b>Painel Hoppy</b>\n\n"
-        f"🎵 Pacientes: <b>{r['pacientes']}</b>\n"
-        f"📚 Alunos: <b>{r['alunos']}</b>\n"
-        f"✅ Tarefas pendentes: <b>{r['tarefas']}</b>\n\n"
+        f"🎵 Pacientes: <b>{r.get('pacientes', 0)}</b>\n"
+        f"📚 Alunos: <b>{r.get('alunos', 0)}</b>\n"
+        f"✅ Tarefas pendentes: <b>{r.get('tarefas', 0)}</b>\n"
+        f"📝 Evoluções: <b>{r.get('evolucoes', 0)}</b>\n"
+        f"🗓 Agenda: <b>{r.get('agenda', 0)}</b>\n\n"
         "🟢 Sistema online\n"
         "🧠 Memória SQLite ativa\n"
-        "🌐 Tradutor rodando em background"
+        "🌐 Tradutor/Radar rodando em background"
     )
 
     await safe_reply(update, texto, reply_markup=main_keyboard())
+
+
+async def memoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await painel(update, context)
 
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,10 +194,10 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Tradutor Telethon ativo\n"
         "✅ Scheduler ativo\n\n"
         "⚠️ Checklist:\n"
-        "• manter TELEGRAM_TOKEN no Railway\n"
-        "• manter TRADUTOR_SESSION_STRING no Railway\n"
-        "• não subir credentials.json no GitHub\n"
-        "• manter apenas 1 instância do bot rodando"
+        "• TELEGRAM_TOKEN somente no Railway\n"
+        "• TRADUTOR_SESSION_STRING somente no Railway\n"
+        "• Não subir credentials.json no GitHub\n"
+        "• Manter apenas 1 instância do bot rodando"
     )
 
     await safe_reply(update, texto, reply_markup=main_keyboard())
@@ -210,9 +221,7 @@ async def cmd_addpaciente(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome, obs = parse_nome_obs(update.message.text)
 
     if not nome:
-        await update.message.reply_text(
-            "Use assim:\n/addpaciente Nome | observação"
-        )
+        await update.message.reply_text("Use assim:\n/addpaciente Nome | observação")
         return
 
     add_paciente(nome, obs)
@@ -228,9 +237,7 @@ async def cmd_addaluno(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome, obs = parse_nome_obs(update.message.text)
 
     if not nome:
-        await update.message.reply_text(
-            "Use assim:\n/addaluno Nome | observação"
-        )
+        await update.message.reply_text("Use assim:\n/addaluno Nome | observação")
         return
 
     add_aluno(nome, obs)
@@ -243,15 +250,13 @@ async def cmd_addaluno(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_addtarefa(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.split(" ", 1)
+    partes = update.message.text.split(" ", 1)
 
-    if len(texto) < 2 or not texto[1].strip():
-        await update.message.reply_text(
-            "Use assim:\n/addtarefa descrição da tarefa"
-        )
+    if len(partes) < 2 or not partes[1].strip():
+        await update.message.reply_text("Use assim:\n/addtarefa descrição da tarefa")
         return
 
-    tarefa = texto[1].strip()
+    tarefa = partes[1].strip()
     user_id = update.effective_user.id
 
     add_tarefa(user_id, tarefa)
@@ -262,10 +267,72 @@ async def cmd_addtarefa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_evolucao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nome, texto = parse_nome_obs(update.message.text)
+
+    if not nome or not texto:
+        await update.message.reply_text(
+            "Use assim:\n/evolucao Nome | texto da evolução\n\n"
+            "Exemplo:\n/evolucao João | respondeu bem aos estímulos sonoros"
+        )
+        return
+
+    add_evolucao(nome, texto)
+
+    await update.message.reply_text(
+        f"✅ Evolução salva:\n\n👤 <b>{nome}</b>\n📝 {texto}",
+        parse_mode="HTML",
+        reply_markup=main_keyboard()
+    )
+
+
+def parse_agenda(texto: str):
+    partes = texto.split(" ", 1)
+    if len(partes) < 2:
+        return None
+
+    campos = [x.strip() for x in partes[1].split("|")]
+
+    if len(campos) < 3:
+        return None
+
+    nome = campos[0]
+    data = campos[1]
+    horario = campos[2]
+    observacao = campos[3] if len(campos) >= 4 else ""
+
+    return nome, data, horario, observacao
+
+
+async def cmd_agenda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dados = parse_agenda(update.message.text)
+
+    if not dados:
+        await update.message.reply_text(
+            "Use assim:\n/agenda Nome | data | horário | observação\n\n"
+            "Exemplo:\n/agenda João | 10/05 | 14:00 | sessão de musicoterapia"
+        )
+        return
+
+    nome, data, horario, observacao = dados
+    add_agenda(nome, data, horario, observacao)
+
+    await update.message.reply_text(
+        f"✅ Agenda salva:\n\n👤 <b>{nome}</b>\n📅 {data}\n🕒 {horario}\n📝 {observacao or 'Sem observação'}",
+        parse_mode="HTML",
+        reply_markup=main_keyboard()
+    )
+
+
 async def cmd_listar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
-            "Use:\n/listar pacientes\n/listar alunos\n/listar tarefas"
+            "Use:\n"
+            "/listar pacientes\n"
+            "/listar alunos\n"
+            "/listar tarefas\n"
+            "/listar evolucoes Nome\n"
+            "/listar agenda"
         )
         return
 
@@ -301,8 +368,35 @@ async def cmd_listar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i, tarefa, status in dados:
             texto += f"#{i} — {tarefa}\n📌 Status: {status}\n\n"
 
+    elif tipo in ["evolucao", "evolucoes", "evoluções"]:
+        if len(context.args) < 2:
+            await update.message.reply_text("Use assim:\n/listar evolucoes Nome")
+            return
+
+        nome = " ".join(context.args[1:])
+        dados = listar_evolucoes(nome)
+
+        if not dados:
+            await update.message.reply_text(f"Nenhuma evolução encontrada para {nome}.")
+            return
+
+        texto = f"📝 <b>Evoluções de {nome}</b>\n\n"
+        for i, evo, data in dados:
+            texto += f"#{i} — {data}\n{evo}\n\n"
+
+    elif tipo == "agenda":
+        dados = listar_agenda()
+
+        if not dados:
+            await update.message.reply_text("Agenda vazia.")
+            return
+
+        texto = "🗓 <b>Agenda cadastrada</b>\n\n"
+        for i, nome, data, horario, obs in dados:
+            texto += f"#{i} — <b>{nome}</b>\n📅 {data} às {horario}\n📝 {obs or 'Sem observação'}\n\n"
+
     else:
-        texto = "Tipo inválido. Use: pacientes, alunos ou tarefas."
+        texto = "Tipo inválido. Use: pacientes, alunos, tarefas, evolucoes ou agenda."
 
     await update.message.reply_text(
         texto[:4000],
@@ -321,7 +415,6 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "menu_radar": (
             "🌍 <b>Radar Global</b>\n\n"
             "Central de monitoramento e tradução.\n\n"
-            "Funções atuais:\n"
             "• Tradutor automático ativo\n"
             "• 19 grupos monitorados\n"
             "• Classificação por tema e urgência\n\n"
@@ -344,7 +437,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• memória contextual\n"
             "• resumos\n"
             "• relatórios\n"
-            "• análise de links\n"
+            "• análise clínica\n"
             "• suporte à gestão"
         ),
         "menu_audio": (
@@ -360,19 +453,17 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔗 <b>Links</b>\n\n"
             "Envie um link do YouTube ou Instagram para análise automática."
         ),
-        "menu_painel": None,
         "menu_gestao": (
             "📚 <b>Gestão</b>\n\n"
-            "Comandos:\n"
             "/addpaciente Nome | observação\n"
             "/addaluno Nome | observação\n"
             "/addtarefa descrição\n"
+            "/evolucao Nome | texto da evolução\n"
+            "/agenda Nome | data | horário | observação\n"
             "/listar pacientes\n"
-            "/listar alunos\n"
-            "/listar tarefas"
+            "/listar evolucoes Nome\n"
+            "/listar agenda"
         ),
-        "menu_admin": None,
-        "menu_ajuda": None,
     }
 
     if data == "menu_painel":
@@ -397,7 +488,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
 
     if not message or not message.text:
@@ -418,12 +509,12 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     if text.lower() in botoes:
-        fake_query = botoes[text.lower()]
-        if fake_query == "menu_painel":
+        data = botoes[text.lower()]
+        if data == "menu_painel":
             await painel(update, context)
-        elif fake_query == "menu_admin":
+        elif data == "menu_admin":
             await admin(update, context)
-        elif fake_query == "menu_ajuda":
+        elif data == "menu_ajuda":
             await ajuda(update, context)
         else:
             await update.message.reply_text(
@@ -458,13 +549,17 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Abrir Hoppy Intelligence Core"),
+        BotCommand("menu", "Abrir menu principal"),
         BotCommand("ajuda", "Ver comandos disponíveis"),
         BotCommand("painel", "Ver resumo do sistema"),
+        BotCommand("memoria", "Ver memória do sistema"),
         BotCommand("admin", "Painel técnico"),
         BotCommand("separar", "Separar vocal e instrumental"),
         BotCommand("addpaciente", "Adicionar paciente"),
         BotCommand("addaluno", "Adicionar aluno"),
         BotCommand("addtarefa", "Adicionar tarefa"),
+        BotCommand("evolucao", "Registrar evolução"),
+        BotCommand("agenda", "Adicionar agenda"),
         BotCommand("listar", "Listar dados salvos"),
     ])
 
@@ -487,12 +582,17 @@ def main():
     )
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("menu", start))
     application.add_handler(CommandHandler("ajuda", ajuda))
     application.add_handler(CommandHandler("painel", painel))
+    application.add_handler(CommandHandler("memoria", memoria))
     application.add_handler(CommandHandler("admin", admin))
+
     application.add_handler(CommandHandler("addpaciente", cmd_addpaciente))
     application.add_handler(CommandHandler("addaluno", cmd_addaluno))
     application.add_handler(CommandHandler("addtarefa", cmd_addtarefa))
+    application.add_handler(CommandHandler("evolucao", cmd_evolucao))
+    application.add_handler(CommandHandler("agenda", cmd_agenda))
     application.add_handler(CommandHandler("listar", cmd_listar))
 
     application.add_handler(get_separation_handler())
@@ -500,7 +600,7 @@ def main():
     application.add_handler(CallbackQueryHandler(menu_callback))
 
     application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link)
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
     )
 
     if application.job_queue:
