@@ -23,7 +23,10 @@ from handlers.voice_separation import get_separation_handler
 from link_analyzer import analyze_link
 
 from services.memory_service import (
-    add_paciente,
+    gerar_relatorio,
+    gerar_plano,
+    buscar_historico,
+)   add_paciente,
     add_aluno,
     add_tarefa,
     add_evolucao,
@@ -323,7 +326,96 @@ async def cmd_agenda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard()
     )
 
+async def cmd_historico(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    partes = update.message.text.split(" ", 1)
 
+    if len(partes) < 2:
+        await update.message.reply_text(
+            "Use assim:\n/historico Nome"
+        )
+        return
+
+    nome = partes[1].strip()
+
+    historico = buscar_historico(nome)
+
+    if not historico:
+        await update.message.reply_text(
+            f"Nenhum histórico encontrado para {nome}."
+        )
+        return
+
+    texto = (
+        f"📚 Histórico de <b>{nome}</b>\n\n"
+        f"{historico}"
+    )
+
+    await update.message.reply_text(
+        texto[:4000],
+        parse_mode="HTML",
+        reply_markup=main_keyboard()
+    )
+
+
+async def cmd_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    partes = update.message.text.split(" ", 1)
+
+    if len(partes) < 2:
+        await update.message.reply_text(
+            "Use assim:\n/relatorio Nome"
+        )
+        return
+
+    nome = partes[1].strip()
+
+    relatorio = gerar_relatorio(nome)
+
+    await update.message.reply_text(
+        relatorio[:4000],
+        reply_markup=main_keyboard()
+    )
+
+
+async def cmd_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    partes = update.message.text.split(" ", 1)
+
+    if len(partes) < 2:
+        await update.message.reply_text(
+            "Use assim:\n/plano Nome"
+        )
+        return
+
+    nome = partes[1].strip()
+
+    plano = gerar_plano(nome)
+
+    await update.message.reply_text(
+        plano[:4000],
+        reply_markup=main_keyboard()
+    )
+
+
+async def cmd_perguntar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    partes = update.message.text.split(" ", 1)
+
+    if len(partes) < 2:
+        await update.message.reply_text(
+            "Use assim:\n/perguntar sua pergunta"
+        )
+        return
+
+    pergunta = partes[1].strip()
+
+    resposta = (
+        f"🧠 IA Assistente\n\n"
+        f"Pergunta:\n{pergunta}\n\n"
+        f"⚠️ Integração OpenAI ainda será conectada."
+    )
+
+    await update.message.reply_text(
+        resposta,
+        reply_markup=main_keyboard()
+    )
 async def cmd_listar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
@@ -561,6 +653,10 @@ async def post_init(application: Application):
         BotCommand("evolucao", "Registrar evolução"),
         BotCommand("agenda", "Adicionar agenda"),
         BotCommand("listar", "Listar dados salvos"),
+        BotCommand("historico", "Ver histórico completo"),
+        BotCommand("relatorio", "Gerar relatório"),
+        BotCommand("plano", "Gerar plano terapêutico"),
+        BotCommand("perguntar", "Perguntar para IA"),
     ])
 
 
@@ -594,6 +690,10 @@ def main():
     application.add_handler(CommandHandler("evolucao", cmd_evolucao))
     application.add_handler(CommandHandler("agenda", cmd_agenda))
     application.add_handler(CommandHandler("listar", cmd_listar))
+    application.add_handler(CommandHandler("historico", cmd_historico))
+    application.add_handler(CommandHandler("relatorio", cmd_relatorio))
+    application.add_handler(CommandHandler("plano", cmd_plano))
+    application.add_handler(CommandHandler("perguntar", cmd_perguntar))
 
     application.add_handler(get_separation_handler())
 
