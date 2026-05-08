@@ -23,10 +23,7 @@ from handlers.voice_separation import get_separation_handler
 from link_analyzer import analyze_link
 
 from services.memory_service import (
-    gerar_relatorio,
-    gerar_plano,
-    buscar_historico,
-)   add_paciente,
+    add_paciente,
     add_aluno,
     add_tarefa,
     add_evolucao,
@@ -37,6 +34,9 @@ from services.memory_service import (
     listar_evolucoes,
     listar_agenda,
     resumo_geral,
+    gerar_relatorio,
+    gerar_plano,
+    buscar_historico,
 )
 
 logging.basicConfig(
