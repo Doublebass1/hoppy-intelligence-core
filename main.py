@@ -101,13 +101,13 @@ def correlator_agent(state: AgentState):
     if graph_driver:
         with graph_driver.session() as session:
             session.run("MERGE (q:Query {name: $query}) RETURN q", query=state["query"])
-            for i, res in enumerate(state["results"]):
+            for i, res in enumerate(state['results']):
                 node_name = f"Result_{i}_{state['query']}"
                 session.run("MERGE (r:Result {name: $node_name, value: $res}) RETURN r", node_name=node_name, res=res)
                 session.run("MATCH (q:Query {name: $query}), (r:Result {name: $node_name}) MERGE (q)-[:HAS_RESULT]->(r)", query=state["query"], node_name=node_name)
                 graph_nodes.append({"node": node_name, "value": res})
     
-    return {"analysis": f"Correlated {len(state["results"])} entities.", "graph_data": graph_nodes}
+    return {"analysis": f"Correlated {len(state['results'])} entities.", "graph_data": graph_nodes}
 
 def contextualizer_agent(state: AgentState):
     print("Executing Contextualizer Agent (Local IA)...")
@@ -117,7 +117,7 @@ def contextualizer_agent(state: AgentState):
 
 def ranker_agent(state: AgentState):
     print("Executing Ranker Agent...")
-    score = min(len(state["results"]) * 5, 100)
+    score = min(len(state['results']) * 5, 100)
     return {"risk_score": score}
 
 # 3. Construir o grafo
