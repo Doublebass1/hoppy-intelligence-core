@@ -254,3 +254,30 @@ def resumo_geral():
         "evolucoes": evolucoes,
         "agenda": agenda,
     }
+    
+    def buscar_historico(nome):
+    conn = connect()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT texto, created_at
+        FROM evolucoes
+        WHERE LOWER(nome) LIKE LOWER(?)
+        ORDER BY id DESC
+        LIMIT 20
+        """,
+        (f"%{nome}%",)
+    )
+
+    dados = cur.fetchall()
+    conn.close()
+
+    if not dados:
+        return ""
+
+    texto = ""
+    for evolucao, data in dados:
+        texto += f"• {data}: {evolucao}\n"
+
+    return texto.strip()
